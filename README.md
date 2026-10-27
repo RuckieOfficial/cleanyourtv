@@ -7,6 +7,10 @@
 
 > A cinematic, OLED-tailored fork of [CleanYourTV](https://github.com/Gathin23/cleanyourtv). Features dynamic TMDb 4K backdrops with live metadata, an Apple-inspired Liquid Glass screensaver, adaptive distraction-free app browsing, and instant screen-off audio mode.
 
+<p align="center">
+  <img src="themes/cinematic/screenshot.jpg" width="800" alt="CleanYourTV Cinema Edition preview">
+</p>
+
 ---
 
 ## 🌟 Highlights & Features
