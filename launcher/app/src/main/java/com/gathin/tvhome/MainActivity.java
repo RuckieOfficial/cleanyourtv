@@ -131,6 +131,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private WallpaperPlayer wallpaperPlayer;
     private GlassView glass;
     private View ambient;
+    private View scrimGridDim;
     private TextView heroName;
     /** The top shelf: heroName, plus the cinematic shelf's "Last opened" line and dock position dots. */
     private View hero;
@@ -378,17 +379,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // the theme's background, so launch looks the same.
         getWindow().setBackgroundDrawable(null);
         wallpaperPlayer = new WallpaperPlayer(this, root, cfg);
+        TmdbWallpaperFetcher.checkAndUpdate(this, wallpaperPlayer, cfg);
         sky = findViewById(R.id.sky);
         sky.setIntensity(cfg.skyIntensity);
         glass = findViewById(R.id.glass);
         if (festive) glass.setAccent(festival.accentColor());
         ambient = findViewById(R.id.ambient);
-        // The glow is one bitmap, so its alpha can be applied while drawing it. Otherwise every frame of
-        // a fade renders it into a full-screen offscreen buffer first.
-        ambient.forceHasOverlappingRendering(false);
-        ambientGlow = cfg.ambientGlow;
-        appGlow = cfg.appGlow;
-        if (!ambientGlow) ambient.setVisibility(View.GONE);
+        if (ambient != null) {
+            ambient.setVisibility(View.GONE);
+            ambient.forceHasOverlappingRendering(false);
+        }
+        scrimGridDim = findViewById(R.id.scrimGridDim);
+        ambientGlow = false;
+        appGlow = false;
         heroName = findViewById(R.id.heroName);
         hero = findViewById(R.id.hero);
         // The hero is now a group (name, and the cinematic lines): without this every fade of the default
@@ -665,7 +668,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // Hide the glass when focus leaves the tiles.
         getWindow().getDecorView().getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
             boolean onTile = newF != null && newF.getId() == R.id.card;
-            if (!onTile) hideGlass();
+            if (!onTile) {
+                hideGlass();
+                if (newF != null && (newF.getId() == R.id.btnSettings || newF.getId() == R.id.btnInputs
+                        || newF.getId() == R.id.btnWifi || newF.getId() == R.id.btnLibraryTop || newF.getId() == R.id.btnReorder)) {
+                    setGridDimmed(false, animations && !reducedMotion);
+                    if (wallpaperPlayer != null) wallpaperPlayer.setPanelVisible(true, animations && !reducedMotion);
+                }
+            }
         });
 
         packageFilter.addAction(Intent.ACTION_PACKAGE_ADDED);
@@ -1416,6 +1426,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     @Override
+    public void onAddTileClicked() {
+        int target = Math.min(COLUMNS, adapter.movableCount() - 1);
+        if (target >= COLUMNS) {
+            focusTile(target);
+        } else {
+            startDockEdit();
+        }
+    }
+
+    @Override
     public void onTileFocused(int position, View card) {
         lastFocused = position;
         lastFocusedKey = adapter.keyAt(position);
@@ -1449,10 +1469,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         glassCardW = card.getWidth();
         glassTargetX = x;
         glassTargetY = y;
-        // Cinematic shelf: the highlight glows in the dock app's colour, plain white in the grid. app_glow: every tile.
-        boolean coloured = (appGlow || cinematic && position < COLUMNS) && !festive;
-        int accent = coloured ? adapter.ambientColorAt(position) : 0;
-        if ((cinematic || appGlow) && !festive && accent != glassAccent) {
+        // The focused tile's glass highlight takes a subtle tint of the app's dominant colour.
+        int accent = adapter.ambientColorAt(position);
+        if (!festive && accent != glassAccent) {
             glassAccent = accent;
             glass.setAccent(accent);
         }
@@ -1486,14 +1505,34 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 else grid.smoothScrollBy(0, dy);
             }
             showHero(position, scroll ? r.top - dy : r.top);
+            if (wallpaperPlayer != null) wallpaperPlayer.setPanelVisible(true, animations && !reducedMotion);
+            setGridDimmed(false, animations && !reducedMotion);
         } else {
             // Below the dock (or in a plain grid) the glow follows the tile without the big name; letting it
             // fade out left the grid on plain black.
             showGlowOnly(position);
+            if (wallpaperPlayer != null) wallpaperPlayer.setPanelVisible(false, animations && !reducedMotion);
+            setGridDimmed(true, animations && !reducedMotion);
             // Scroll just enough so the whole glass (not only the tile) is visible.
             revealRect.set(0, -(int) pad * 2, item.getWidth(), item.getHeight() + (int) pad);
             grid.requestChildRectangleOnScreen(item, revealRect, reducedMotion);
         }
+    }
+
+    private void setGridDimmed(boolean dimmed, boolean animate) {
+        if (scrimGridDim == null) return;
+        float targetAlpha = dimmed ? 0.75f : 0f;
+        scrimGridDim.animate().cancel();
+        if (!animate) {
+            scrimGridDim.setAlpha(targetAlpha);
+            return;
+        }
+        scrimGridDim.animate()
+                .alpha(targetAlpha)
+                .setDuration(dimmed ? 260 : 320)
+                .setInterpolator(dimmed ? new android.view.animation.AccelerateInterpolator()
+                                        : new android.view.animation.DecelerateInterpolator())
+                .start();
     }
 
     /** Refits the glass to the focused holder once the grid layout and tile dimensions settle. */
@@ -1703,6 +1742,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
      * so changing apps neither repaints it on the CPU (about 11 ms) nor uploads it again.
      */
     private void setAmbient(int color) {
+        if (ambient == null) return;
         if (color == ambientColor && ambient.getBackground() != null) return;
         ambientColor = color;
         BitmapDrawable glow = (BitmapDrawable) ambient.getBackground();

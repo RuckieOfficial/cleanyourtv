@@ -6,11 +6,18 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.os.UserManager;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.graphics.PixelFormat;
+import android.media.AudioManager;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.UserManager;
 import android.provider.Settings;
+import android.util.Log;
 import android.view.KeyEvent;
+import android.view.View;
+import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.widget.Toast;
 
@@ -50,6 +57,77 @@ public class HomeKeyService extends AccessibilityService {
     /** The stock launcher's HOME activities (stock_home_redirect), disabled ones included. */
     private final Set<String> stockHome = new HashSet<>();
 
+    private boolean isBlackoutActive = false;
+    private View blackoutView = null;
+    private WindowManager windowManager = null;
+    private final Handler blackoutHandler = new Handler(Looper.getMainLooper());
+    private boolean isHoldingPause = false;
+    private boolean longPressTriggered = false;
+    private boolean isDispatchingShortPress = false;
+    private int wakingKeyCode = KeyEvent.KEYCODE_UNKNOWN;
+
+    private final Runnable blackoutRunnable = () -> {
+        if (isHoldingPause) {
+            longPressTriggered = true;
+            showBlackout();
+        }
+    };
+
+    private void showBlackout() {
+        if (isBlackoutActive) return;
+        blackoutHandler.post(() -> {
+            if (isBlackoutActive) return;
+            try {
+                if (windowManager == null) {
+                    windowManager = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
+                }
+                if (blackoutView == null) {
+                    blackoutView = new View(this);
+                    blackoutView.setBackgroundColor(0xFF000000);
+                    blackoutView.setFocusable(false);
+                    blackoutView.setClickable(true);
+                    blackoutView.setOnClickListener(v -> dismissBlackout());
+                }
+                WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                        WindowManager.LayoutParams.MATCH_PARENT,
+                        WindowManager.LayoutParams.MATCH_PARENT,
+                        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                                | WindowManager.LayoutParams.FLAG_FULLSCREEN
+                                | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                        PixelFormat.OPAQUE
+                );
+                windowManager.addView(blackoutView, lp);
+                isBlackoutActive = true;
+            } catch (Exception e) {
+                Log.e("HomeKeyService", "Error showing blackout overlay", e);
+            }
+        });
+    }
+
+    private void dismissBlackout() {
+        if (!isBlackoutActive) return;
+        blackoutHandler.post(() -> {
+            if (!isBlackoutActive) return;
+            try {
+                if (windowManager != null && blackoutView != null) {
+                    windowManager.removeViewImmediate(blackoutView);
+                }
+            } catch (Exception e) {
+                Log.e("HomeKeyService", "Error removing blackout overlay", e);
+            } finally {
+                isBlackoutActive = false;
+            }
+        });
+    }
+
+    private boolean isPauseKey(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE
+                || keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+                || keyCode == KeyEvent.KEYCODE_MEDIA_PLAY;
+    }
+
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
@@ -85,6 +163,8 @@ public class HomeKeyService extends AccessibilityService {
 
     @Override
     public void onDestroy() {
+        dismissBlackout();
+        blackoutHandler.removeCallbacksAndMessages(null);
         stopWaitingForUnlock();
         super.onDestroy();
     }
@@ -121,6 +201,73 @@ public class HomeKeyService extends AccessibilityService {
 
     @Override
     protected boolean onKeyEvent(KeyEvent event) {
+        if (isDispatchingShortPress) return false;
+
+        int kc = event.getKeyCode();
+
+        // 1. If blackout is active: volume keys pass through; consuming pause key release; any other key wakes up
+        if (isBlackoutActive) {
+            if (kc == KeyEvent.KEYCODE_VOLUME_UP || kc == KeyEvent.KEYCODE_VOLUME_DOWN || kc == KeyEvent.KEYCODE_VOLUME_MUTE) {
+                return false;
+            }
+            // Consume the release of the pause key that started the blackout
+            if (isHoldingPause && isPauseKey(kc)) {
+                if (event.getAction() == KeyEvent.ACTION_UP) {
+                    isHoldingPause = false;
+                    longPressTriggered = false;
+                }
+                return true;
+            }
+            // Any other key (or subsequent press) wakes up the screen
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                wakingKeyCode = kc;
+                dismissBlackout();
+            }
+            return true;
+        }
+
+        // 2. Consume the ACTION_UP of the key that just woke up the screen so it does not trigger app actions
+        if (wakingKeyCode != KeyEvent.KEYCODE_UNKNOWN) {
+            if (kc == wakingKeyCode) {
+                if (event.getAction() == KeyEvent.ACTION_UP) {
+                    wakingKeyCode = KeyEvent.KEYCODE_UNKNOWN;
+                }
+                return true;
+            } else {
+                wakingKeyCode = KeyEvent.KEYCODE_UNKNOWN;
+            }
+        }
+
+        // 3. Long press detection for Pause button -> Turn off OLED screen
+        if (isPauseKey(kc)) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                if (event.getRepeatCount() == 0) {
+                    isHoldingPause = true;
+                    longPressTriggered = false;
+                    blackoutHandler.postDelayed(blackoutRunnable, 750);
+                }
+                return true;
+            } else if (event.getAction() == KeyEvent.ACTION_UP) {
+                isHoldingPause = false;
+                blackoutHandler.removeCallbacks(blackoutRunnable);
+                if (longPressTriggered) {
+                    longPressTriggered = false;
+                    return true;
+                }
+                // Short press: dispatch standard Play/Pause to the active media player
+                AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+                if (am != null) {
+                    isDispatchingShortPress = true;
+                    try {
+                        am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, kc));
+                        am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, kc));
+                    } finally {
+                        isDispatchingShortPress = false;
+                    }
+                }
+                return true;
+            }
+        }
         // A scancode entry is more specific than any keycode, so it goes first.
         if (RemoteKeys.handle(this, event, appScancodes.get(event.getScanCode()),
                 holdAppScancodes.get(event.getScanCode()))) return true;

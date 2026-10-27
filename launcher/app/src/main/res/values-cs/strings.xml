@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Domů</string>
+    <string name="add_app">Přidat aplikaci</string>
     <string name="inputs">Vstupy</string>
     <string name="wifi">Wi-Fi</string>
     <string name="settings">Nastavení</string>

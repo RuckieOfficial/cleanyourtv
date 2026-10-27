@@ -6,6 +6,10 @@ android {
     namespace 'com.gathin.tvhome'
     compileSdk 34
 
+    buildFeatures {
+        buildConfig true
+    }
+
     defaultConfig {
         // Opt-in identity for firmware with a package-name HOME allowlist; see docs/devices/xiaomi-mitv-aetp0-dofus.md.
         applicationId providers.gradleProperty('launcherApplicationId').getOrElse('com.gathin.tvhome')
@@ -13,6 +17,16 @@ android {
         targetSdk 34
         versionCode 7
         versionName '2.6'
+
+        def localProps = new Properties()
+        def localPropsFile = rootProject.file('local.properties')
+        if (localPropsFile.exists()) {
+            localPropsFile.withReader('UTF-8') { reader -> localProps.load(reader) }
+        }
+        def tmdbKey = System.getenv("TMDB_API_KEY") ?: localProps.getProperty("tmdb.api.key", "")
+        buildConfigField "String", "TMDB_API_KEY", "\"${tmdbKey}\""
+        def dockAppsEnv = System.getenv("DOCK_APPS") ?: localProps.getProperty("dock.apps", "")
+        buildConfigField "String", "DOCK_APPS", "\"${dockAppsEnv}\""
     }
 
     buildTypes {

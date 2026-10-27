@@ -25,12 +25,37 @@
         android:visibility="gone"
         android:importantForAccessibility="no" />
 
-    <!-- Ambient glow in the colour of the focused dock app. -->
+    <!-- Ambient glow view: kept in layout with visibility GONE -->
     <View
         android:id="@+id/ambient"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:alpha="0" />
+        android:visibility="gone"
+        android:alpha="0" />    <!-- Soft left gradient: protects movie title, rating, overview and clock against bright wallpapers -->
+    <View
+        android:id="@+id/scrimLeft"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/scrim_left_gradient"
+        android:importantForAccessibility="no" />
+
+    <!-- Soft top vignette: protects header pills (Inputs, Settings, etc.) against bright wallpapers -->
+    <View
+        android:id="@+id/scrimTop"
+        android:layout_width="match_parent"
+        android:layout_height="180dp"
+        android:layout_gravity="top"
+        android:background="@drawable/scrim_top_gradient"
+        android:importantForAccessibility="no" />
+
+    <!-- Dark overlay when browsing apps below dock: dims wallpaper so app search/browsing is distraction-free -->
+    <View
+        android:id="@+id/scrimGridDim"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#FF000000"
+        android:alpha="0"
+        android:importantForAccessibility="no" />
 
     <!-- Race-weekend panel (a theme's race_calendar, see RaceWeekend), mirrored: under the clock on the right. -->
     <LinearLayout

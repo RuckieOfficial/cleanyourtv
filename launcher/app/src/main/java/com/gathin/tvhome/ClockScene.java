@@ -101,7 +101,7 @@ final class ClockScene {
 
     private void setGlow(int color) {
         glowColor = color;
-        int c = color & 0x00FFFFFF;
-        glow.setColors(new int[]{0x40000000 | c, 0x14000000 | c, 0x00000000 | c});
+        // Keep pure pitch black background for OLED - no colored glow wash
+        glow.setColors(new int[]{0x00000000, 0x00000000, 0x00000000});
     }
 }
