@@ -9,6 +9,7 @@
   ],
   "background_color": "#090C14",
   "wallpaper": true,
+  "wallpaper_captions": true,
   "cinematic_home": true,
   "dock_glass": true,
   "icon_only_buttons": true,
