@@ -32,12 +32,18 @@ import android.media.tv.TvContract;
 import android.media.tv.TvInputInfo;
 import android.media.tv.TvInputManager;
 import android.net.ConnectivityManager;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
 import android.net.Uri;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.util.Enumeration;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
@@ -577,7 +583,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         btnInputs = findViewById(R.id.btnInputs);
         View btnSettings = findViewById(R.id.btnSettings);
         btnInputs.setOnClickListener(v -> showInputs());
-        btnWifi.setOnClickListener(v -> openNetworkPill());
+        btnWifi.setOnClickListener(v -> showWifiPopup());
         btnWifi.setOnLongClickListener(v -> {
             open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
             return true;
@@ -587,11 +593,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             ((TextView) btnSettings).setText(R.string.launcher_settings);
             ((TextView) btnSettings).setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_home_settings_pill, 0, 0, 0);
         }
-        btnSettings.setOnClickListener(v -> {
-            if (launcherSettingsButton) startActivityForResult(
-                    new Intent(this, LauncherSettingsActivity.class), LAUNCHER_SETTINGS_REQUEST);
-            else open(systemIntent(Settings.ACTION_SETTINGS));
-        });
+        btnSettings.setOnClickListener(v -> showSettingsMenu());
         btnReorder = findViewById(R.id.btnReorder);
         btnReorder.setOnClickListener(v -> toggleReorder());
         btnReorder.setVisibility(cfg.reorderButton ? View.VISIBLE : View.GONE);
@@ -2795,6 +2797,126 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         rows.getChildAt(0).requestFocus();
     }
 
+    /** Dropdown menu under the Wi-Fi pill: current connection status (SSID, IP) and network settings. */
+    private void showWifiPopup() {
+        View anchor = findViewById(R.id.btnWifi);
+        if (anchor == null || anchor.getVisibility() != View.VISIBLE) {
+            openNetworkPill();
+            return;
+        }
+        View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        LinearLayout rows = panel.findViewById(R.id.rows);
+
+        int width = Math.max(anchor.getWidth(), (int) (220 * density));
+        final PopupWindow popup = glassPopup(panel, width);
+
+        boolean online = false, ethernet = false, wifi = false;
+        String ssid = null;
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm != null) {
+                for (Network net : cm.getAllNetworks()) {
+                    NetworkCapabilities caps = cm.getNetworkCapabilities(net);
+                    if (caps == null || !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) continue;
+                    online = true;
+                    if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) ethernet = true;
+                    if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) wifi = true;
+                }
+            }
+            if (wifi) {
+                WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                WifiInfo info = wm != null ? wm.getConnectionInfo() : null;
+                if (info != null) {
+                    String s = info.getSSID();
+                    if (s != null) {
+                        s = s.replace("\"", "").trim();
+                        if (!s.isEmpty() && !s.contains("unknown") && !s.equals("0x")) ssid = s;
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+
+        String ip = getDeviceIp();
+
+        int netIcon = ethernet ? R.drawable.ic_ethernet : R.drawable.ic_wifi;
+        String netTitle = ssid != null ? ssid : (ethernet ? getString(R.string.ethernet) : getString(R.string.wifi));
+        String statusText = online ? (ip != null ? ip : getString(R.string.connected)) : getString(R.string.offline);
+        addNetworkRow(rows, popup, netIcon, netTitle, statusText, online, this::openNetworkPill);
+
+        addSeparator(rows);
+
+        addNetworkRow(rows, popup, R.drawable.ic_settings, getString(R.string.quick_network), null, false, this::openNetworkPill);
+
+        if (!vpnApp.isEmpty()) {
+            addNetworkRow(rows, popup, R.drawable.ic_lock, getString(R.string.vpn), null, false, () -> {
+                Intent vi = getPackageManager().getLeanbackLaunchIntentForPackage(vpnApp);
+                if (vi == null) vi = getPackageManager().getLaunchIntentForPackage(vpnApp);
+                if (vi != null) open(vi);
+            });
+        }
+
+        panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        popup.setWidth(Math.max(width, Math.min(panel.getMeasuredWidth(), (int) (320 * density))));
+
+        int alignment = getResources().getBoolean(R.bool.rtl_menu_bar) ? Gravity.END : Gravity.START;
+        dropIn(popup, panel, anchor, alignment);
+        if (rows.getChildCount() > 0) {
+            rows.getChildAt(0).requestFocus();
+        }
+    }
+
+    private void addNetworkRow(LinearLayout rows, PopupWindow popup, int iconRes, String title, String statusText, boolean dotVisible, Runnable action) {
+        View row = getLayoutInflater().inflate(R.layout.item_input, rows, false);
+        ((ImageView) row.findViewById(R.id.icon)).setImageResource(iconRes);
+        ((TextView) row.findViewById(R.id.title)).setText(title);
+        TextView status = row.findViewById(R.id.status);
+        View dot = row.findViewById(R.id.dot);
+        if (!TextUtils.isEmpty(statusText)) {
+            status.setText(statusText);
+            status.setVisibility(View.VISIBLE);
+        } else {
+            status.setVisibility(View.GONE);
+        }
+        dot.setVisibility(dotVisible ? View.VISIBLE : View.GONE);
+        row.setOnClickListener(v -> {
+            popup.dismiss();
+            if (action != null) action.run();
+        });
+        rows.addView(row);
+    }
+
+    private String getDeviceIp() {
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm != null) {
+                Network net = cm.getActiveNetwork();
+                if (net != null) {
+                    LinkProperties lp = cm.getLinkProperties(net);
+                    if (lp != null) {
+                        for (LinkAddress la : lp.getLinkAddresses()) {
+                            InetAddress addr = la.getAddress();
+                            if (addr instanceof Inet4Address && !addr.isLoopbackAddress()) {
+                                return addr.getHostAddress();
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        try {
+            for (Enumeration<NetworkInterface> en = NetworkInterface.getNetworkInterfaces(); en != null && en.hasMoreElements();) {
+                NetworkInterface intf = en.nextElement();
+                for (Enumeration<InetAddress> enumIp = intf.getInetAddresses(); enumIp.hasMoreElements();) {
+                    InetAddress addr = enumIp.nextElement();
+                    if (!addr.isLoopbackAddress() && addr instanceof Inet4Address) {
+                        return addr.getHostAddress();
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
     private PopupWindow glassPopup(View panel, int width) {
         final PopupWindow popup = new PopupWindow(panel, width, ViewGroup.LayoutParams.WRAP_CONTENT, true);
         popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));   // needed for Back to dismiss
@@ -2883,19 +3005,30 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         rows.getChildAt(0).requestFocus();
     }
 
-    /** The header opens launcher settings directly; hold OK keeps the extra home actions available. */
+    /** Dropdown menu under the Settings gear: TV settings, Launcher settings, Dock edit, Reorder. */
     private void showSettingsMenu() {
         View anchor = findViewById(R.id.btnSettings);
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
         LinearLayout rows = panel.findViewById(R.id.rows);
-        PopupWindow popup = glassPopup(panel, (int) (200 * density));
-        if (!launcherSettingsButton) addSettingsMenuRow(rows, popup, R.string.launcher_settings, () -> startActivityForResult(
-                new Intent(this, LauncherSettingsActivity.class), LAUNCHER_SETTINGS_REQUEST));
-        if (moduleCards) addSettingsMenuRow(rows, popup, R.string.module_cards, this::showModuleCards);
-        if (dockRow) addSettingsMenuRow(rows, popup, R.string.dock_edit, this::startDockEdit);
-        addSettingsMenuRow(rows, popup, R.string.reorder, this::toggleReorder);
+        PopupWindow popup = glassPopup(panel, (int) (220 * density));
+
+        // 1. Nastavení TV (hlavní Philips TV menu - obraz, zvuk, ambilight)
+        addNetworkRow(rows, popup, R.drawable.ic_settings, getString(R.string.settings), null, false,
+                () -> open(systemIntent(Settings.ACTION_SETTINGS)));
+
+        // 2. Nastavení launcheru (Cinema, tapety, dok)
+        addNetworkRow(rows, popup, R.drawable.ic_home_settings_pill, getString(R.string.launcher_settings), null, false,
+                () -> startActivityForResult(new Intent(this, LauncherSettingsActivity.class), LAUNCHER_SETTINGS_REQUEST));
+
+        addSeparator(rows);
+
+        // 3. Úprava doku a řazení
+        if (dockRow) addNetworkRow(rows, popup, R.drawable.ic_swap_vert, getString(R.string.dock_edit), null, false, this::startDockEdit);
+        addNetworkRow(rows, popup, R.drawable.ic_swap_vert, getString(R.string.reorder), null, false, this::toggleReorder);
+        if (moduleCards) addNetworkRow(rows, popup, R.drawable.ic_apps, getString(R.string.module_cards), null, false, this::showModuleCards);
+
         panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
-        popup.setWidth(Math.max((int) (200 * density), panel.getMeasuredWidth()));
+        popup.setWidth(Math.max((int) (220 * density), Math.min(panel.getMeasuredWidth(), (int) (340 * density))));
         // Hebrew puts Settings at the left of the header: grow the menu inward from it.
         dropIn(popup, panel, anchor, getResources().getBoolean(R.bool.rtl_menu_bar)
                 ? Gravity.START : Gravity.END);
