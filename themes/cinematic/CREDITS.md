@@ -1,3 +1,3 @@
 # Wallpaper Credits
 
-- `wallpaper.jpg`: Dark cinema auditorium backdrop. CC0 / Public Domain / Royalty-free photography. Resized to 1920x1080 and optimised for OLED displays.
+- `wallpaper.jpg`: Dark blue-green OLED gradient backdrop designed for the cinematic theme. Created by Lukáš Rücker (@RuckieOfficial), released under CC0 1.0 Universal (Public Domain Dedication): https://creativecommons.org/publicdomain/zero/1.0/
